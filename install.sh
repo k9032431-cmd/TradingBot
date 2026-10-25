@@ -22,9 +22,22 @@ die()  { echo -e "\n${R}✗ $*${N}" >&2; exit 1; }
 # читаем ответы с терминала, даже когда скрипт пришёл через curl | bash
 has_tty() { { true </dev/tty; } 2>/dev/null; }
 ask() {  # ask "Вопрос" "по умолчанию" -> ответ
-  local answer=""
+  # Читаем посимвольно: мобильные SSH-терминалы шлют Enter как \r, обычный read его не видит
+  local answer="" c
   if has_tty; then
-    read -r -p "  $1${2:+ [$2]}: " answer </dev/tty || return 1
+    while read -r -s -t 0.05 -n1 _ </dev/tty; do :; done   # выбрасываем случайно нажатое до вопроса
+    printf '  %s%s: ' "$1" "${2:+ [$2]}" >/dev/tty
+    while IFS= read -r -s -n1 c </dev/tty || return 1; do
+      case "$c" in
+        "" | $'\n') break ;;                                # Enter (\n)
+        $'\r') read -r -s -t 0.2 -n1 _ </dev/tty || true; break ;;  # Enter (\r или \r\n)
+        $'\x7f' | $'\b')                                    # Backspace
+          if [[ -n "$answer" ]]; then answer="${answer%?}"; printf '\b \b' >/dev/tty; fi ;;
+        $'\e') read -r -s -t 0.05 -n5 _ </dev/tty || true ;;  # стрелки и т.п. — пропускаем
+        *) answer+="$c"; printf '%s' "$c" >/dev/tty ;;
+      esac
+    done
+    printf '\n' >/dev/tty
   fi
   echo "${answer:-$2}"
 }
@@ -61,6 +74,17 @@ if ! $PY -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
 fi
 ok "$($PY -V)"
 
+step "Проверяю связь с Telegram"
+tg="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 -m 10 https://api.telegram.org || true)"
+if [[ "$tg" =~ ^[23] ]]; then
+  ok "api.telegram.org доступен"
+else
+  warn "Этот сервер не может подключиться к api.telegram.org (код ${tg:-000})."
+  warn "Бот не сможет работать здесь: провайдер или страна сервера блокирует Telegram."
+  warn "Возьми VPS в другой стране (например, Германия / Нидерланды) или проверь файрвол."
+  [[ "${FORCE:-}" == 1 ]] || die "Установка остановлена. Чтобы продолжить всё равно: ... | sudo FORCE=1 bash"
+fi
+
 # ---------- пользователь и код ----------
 step "Скачиваю бота в $DIR"
 id "$SVC_USER" &>/dev/null || useradd --system --home "$DIR" --shell /usr/sbin/nologin "$SVC_USER"
@@ -92,15 +116,17 @@ ENV_FILE="$DIR/.env"
 if [[ ! -f "$ENV_FILE" ]]; then
   step "Настройка"
   echo "  Токен бота: @BotFather → /newbot (или /token для существующего)"
-  token="${BOT_TOKEN:-}"
+  token="$(tr -d '[:space:]' <<<"${BOT_TOKEN:-}")"
   while true; do
     if [[ ! "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{30,}$ ]]; then
-      [[ -n "$token" ]] && warn "Не похоже на токен, попробуй ещё раз"
+      [[ -n "$token" ]] && warn "Не похоже на токен (формат 123456789:AAH...), попробуй ещё раз"
       has_tty || die "Передай токен: ... | sudo BOT_TOKEN=123:abc bash"
       token="$(ask "BOT_TOKEN" "")" || die "Ввод прерван"
+      token="$(tr -d '[:space:]' <<<"$token")"   # убираем пробелы и \r, которые добавляют мобильные терминалы
       continue
     fi
-    me="$(curl -s -m 10 "https://api.telegram.org/bot$token/getMe" || true)"
+    echo "  Проверяю токен в Telegram…"
+    me="$(curl -s --connect-timeout 5 -m 10 "https://api.telegram.org/bot$token/getMe" || true)"
     if [[ "$me" == *'"ok":true'* ]]; then
       ok "Бот найден: @$(sed -E 's/.*"username":"([^"]+)".*/\1/' <<<"$me")"
       break
@@ -109,7 +135,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
       has_tty || die "Неверный BOT_TOKEN"
       token=""
     else
-      warn "Не удалось проверить токен (нет связи с Telegram) — продолжаю"
+      warn "Не удалось проверить токен (нет ответа от Telegram) — продолжаю"
       break
     fi
   done
