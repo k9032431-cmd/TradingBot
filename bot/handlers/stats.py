@@ -59,7 +59,7 @@ async def stats(call: CallbackQuery, db: DB) -> None:
         "",
         f"{e('profit')} Прибыль:   <b>{money(gross_win, cur)}</b>  ({len(wins)})",
         f"{e('loss')} Убытки:     <b>{money(abs(gross_loss), cur)}</b>  ({len(losses)})",
-        f"{e('expense')} Расходы:   <b>{money(abs(expenses), cur)}</b>",
+        f"{e('expense')} Расходы:   {pnl(expenses, cur)}",
         "",
         f"{e('target')} Винрейт:  <b>{winrate:.0f}%</b>  {bar}",
         f"Сделок: <b>{len(trades)}</b>",
@@ -87,7 +87,7 @@ async def stats(call: CallbackQuery, db: DB) -> None:
             cats[r["category"] or "Другое"] += r["amount"]
     if cats:
         lines += ["", f"{e('expense')} <b>Расходы по категориям</b>"] + \
-                 [f"{h(c)}:  {money(abs(v), cur)}" for c, v in sorted(cats.items(), key=lambda x: x[1])]
+                 [f"{h(c)}:  {pnl(v, cur)}" for c, v in sorted(cats.items(), key=lambda x: x[1])]
 
     balance = user["start_balance"] + await db.balance_delta(uid)
     lines += ["━━━━━━━━━━━━━━━━━━", f"{e('wallet')} Баланс: <b>{money(balance, cur)}</b>"]

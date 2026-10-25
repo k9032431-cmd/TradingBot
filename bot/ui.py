@@ -13,6 +13,7 @@ EMOJI = {
     "history": "📒", "alert": "🔔", "price": "📈", "calc": "🧮", "settings": "⚙️",
     "back": "◀️", "up": "🚀", "down": "📉", "fire": "🔥", "check": "✅", "cross": "❌",
     "trash": "🗑", "wallet": "💰", "chart": "📊", "target": "🎯", "export": "📤",
+    "link": "🔗", "position": "📍", "sync": "🔄", "exchange": "🏦", "lock": "🔒",
 }
 
 
@@ -55,8 +56,11 @@ def back_row(cb: str = "menu") -> list[InlineKeyboardButton]:
     return [btn("Меню", cb, icon="back")]
 
 
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu(connected: bool = False) -> InlineKeyboardMarkup:
+    exchange_row = ([btn("Позиции", "ex:pos", BLUE, "position"), btn("Binance", "ex", BLUE, "exchange")]
+                    if connected else [btn("Подключить Binance (Tiger)", "ex", BLUE, "link")])
     return kb(
+        exchange_row,
         [btn("Прибыль", "add:profit", GREEN, "profit"), btn("Убыток", "add:loss", RED, "loss")],
         [btn("Расход", "add:expense", RED, "expense"), btn("Депозит / вывод", "add:cash", GREEN, "wallet")],
         [btn("Статистика", "stats:month", BLUE, "stats"), btn("История", "hist:0", BLUE, "history")],

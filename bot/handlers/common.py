@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from ..db import DB
+from ..sync import EXCHANGE, snapshot
 from ..ui import e, h, main_menu, money, pnl
 
 router = Router()
@@ -45,10 +46,18 @@ async def menu_text(db: DB, user_id: int, name: str) -> str:
     today = sum(r["amount"] for r in await db.entries(user_id, day_start()) if r["kind"] in ("trade", "expense"))
     month = sum(r["amount"] for r in await db.entries(user_id, month_start()) if r["kind"] in ("trade", "expense"))
     alerts = len(await db.user_alerts(user_id))
+    snap = await snapshot(db, user_id)
+    exchange = ""
+    if snap:
+        exchange = (f"{e('exchange')} Binance Futures:  <b>{money(snap['equity'], 'USDT')}</b>\n"
+                    f"Открытый P&L:  {pnl(snap['upnl'], 'USDT')}\n")
+    elif await db.get_api(user_id, EXCHANGE):
+        exchange = f"{e('exchange')} Binance:  <i>нет связи</i>\n"
     return (
         f"{e('logo')} <b>Trading Desk</b>  ·  {h(name)}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"{e('wallet')} Баланс:  <b>{money(balance, cur)}</b>\n"
+        f"{exchange}"
+        f"{e('wallet')} Журнал:  <b>{money(balance, cur)}</b>\n"
         f"Сегодня:  {pnl(today, cur)}\n"
         f"Месяц:     {pnl(month, cur)}\n"
         f"{e('alert')} Активных алертов:  <b>{alerts}</b>\n"
@@ -62,13 +71,14 @@ async def menu_text(db: DB, user_id: int, name: str) -> str:
 async def cmd_start(message: Message, state: FSMContext, db: DB) -> None:
     await state.clear()
     await message.answer(await menu_text(db, message.from_user.id, message.from_user.first_name),
-                         reply_markup=main_menu())
+                         reply_markup=main_menu(bool(await db.get_api(message.from_user.id, EXCHANGE))))
 
 
 @router.callback_query(F.data == "menu")
 async def cb_menu(call: CallbackQuery, state: FSMContext, db: DB) -> None:
     await state.clear()
-    await show(call, await menu_text(db, call.from_user.id, call.from_user.first_name), main_menu())
+    await show(call, await menu_text(db, call.from_user.id, call.from_user.first_name),
+               main_menu(bool(await db.get_api(call.from_user.id, EXCHANGE))))
 
 
 @router.message(Command("id"))

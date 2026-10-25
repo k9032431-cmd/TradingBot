@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS alerts (
     triggered_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(active);
+CREATE TABLE IF NOT EXISTS api_keys (
+    user_id INTEGER NOT NULL,
+    exchange TEXT NOT NULL,        -- bybit
+    api_key TEXT NOT NULL,
+    secret_enc TEXT NOT NULL,      -- секрет зашифрован (см. crypto.py)
+    last_sync_ms INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, exchange)
+);
 """
 
 
@@ -46,6 +55,13 @@ class DB:
         self.conn = await aiosqlite.connect(self.path)
         self.conn.row_factory = aiosqlite.Row
         await self.conn.executescript(SCHEMA)
+        # миграция: ext_id — ID записи на бирже, чтобы не импортировать дважды
+        cur = await self.conn.execute("PRAGMA table_info(entries)")
+        if "ext_id" not in {r["name"] for r in await cur.fetchall()}:
+            await self.conn.execute("ALTER TABLE entries ADD COLUMN ext_id TEXT")
+        await self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_ext ON entries(user_id, ext_id) WHERE ext_id IS NOT NULL"
+        )
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -76,6 +92,38 @@ class DB:
         )
         await self.conn.commit()
         return cur.lastrowid
+
+    async def import_entry(self, user_id: int, ext_id: str, kind: str, amount: float, created_at: int,
+                           symbol: str | None = None, category: str | None = None,
+                           note: str | None = None) -> bool:
+        """Запись с биржи. False — уже была импортирована."""
+        cur = await self.conn.execute(
+            "INSERT OR IGNORE INTO entries (user_id, kind, amount, symbol, category, note, created_at, ext_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, kind, amount, symbol, category, note, created_at, ext_id),
+        )
+        return cur.rowcount > 0
+
+    async def accumulate_entry(self, user_id: int, ext_id: str, kind: str, amount: float, created_at: int,
+                               category: str | None = None, note: str | None = None) -> None:
+        """Сводная запись за день (комиссии, фандинг): сумма накапливается."""
+        await self.conn.execute(
+            "INSERT INTO entries (user_id, kind, amount, category, note, created_at, ext_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, ext_id) WHERE ext_id IS NOT NULL DO UPDATE SET amount = amount + excluded.amount",
+            (user_id, kind, amount, category, note, created_at, ext_id),
+        )
+
+    async def drop_daily_imports(self, user_id: int, prefixes: tuple[str, ...], since: int) -> None:
+        """Перед полным переимпортом убираем сводные записи, иначе суммы задвоятся."""
+        for p in prefixes:
+            await self.conn.execute(
+                "DELETE FROM entries WHERE user_id = ? AND ext_id LIKE ? AND created_at >= ?",
+                (user_id, p + "%", since),
+            )
+
+    async def commit(self) -> None:
+        await self.conn.commit()
 
     async def entries(self, user_id: int, since: int = 0, limit: int | None = None,
                       offset: int = 0) -> list[aiosqlite.Row]:
@@ -146,6 +194,36 @@ class DB:
         cur = await self.conn.execute("DELETE FROM alerts WHERE user_id = ? AND active = 1", (user_id,))
         await self.conn.commit()
         return cur.rowcount
+
+    # ---------- API-ключи бирж ----------
+    async def set_api(self, user_id: int, exchange: str, api_key: str, secret_enc: str) -> None:
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO api_keys (user_id, exchange, api_key, secret_enc, last_sync_ms, created_at) "
+            "VALUES (?, ?, ?, ?, 0, ?)",
+            (user_id, exchange, api_key, secret_enc, int(time.time())),
+        )
+        await self.conn.commit()
+
+    async def get_api(self, user_id: int, exchange: str) -> aiosqlite.Row | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM api_keys WHERE user_id = ? AND exchange = ?", (user_id, exchange)
+        )
+        return await cur.fetchone()
+
+    async def all_apis(self, exchange: str) -> list[aiosqlite.Row]:
+        cur = await self.conn.execute("SELECT * FROM api_keys WHERE exchange = ?", (exchange,))
+        return await cur.fetchall()
+
+    async def set_api_sync(self, user_id: int, exchange: str, last_sync_ms: int) -> None:
+        await self.conn.execute(
+            "UPDATE api_keys SET last_sync_ms = ? WHERE user_id = ? AND exchange = ?",
+            (last_sync_ms, user_id, exchange),
+        )
+        await self.conn.commit()
+
+    async def delete_api(self, user_id: int, exchange: str) -> None:
+        await self.conn.execute("DELETE FROM api_keys WHERE user_id = ? AND exchange = ?", (user_id, exchange))
+        await self.conn.commit()
 
     async def wipe_user(self, user_id: int) -> None:
         await self.conn.execute("DELETE FROM entries WHERE user_id = ?", (user_id,))

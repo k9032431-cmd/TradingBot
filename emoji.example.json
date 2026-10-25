@@ -20,5 +20,10 @@
   "wallet": "",
   "chart": "",
   "target": "",
-  "export": ""
+  "export": "",
+  "link": "",
+  "position": "",
+  "sync": "",
+  "exchange": "",
+  "lock": ""
 }

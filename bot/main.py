@@ -10,7 +10,8 @@ from aiogram.types import BotCommand, TelegramObject
 
 from .config import config
 from .db import DB
-from .handlers import alerts, common, journal, stats, tools
+from .binance import Binance
+from .handlers import alerts, common, exchange, journal, stats, tools
 from .prices import prices
 
 
@@ -38,22 +39,29 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage(), db=db)
     dp.update.outer_middleware(AccessMiddleware())
     # common первым: /start и /menu работают из любого состояния
-    dp.include_routers(common.router, journal.router, alerts.router, stats.router, tools.router)
+    dp.include_routers(common.router, exchange.router, journal.router, alerts.router, stats.router,
+                       tools.router)
 
     await bot.set_my_commands([
         BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="pos", description="Открытые позиции Binance"),
         BotCommand(command="alert", description="Алерт: /alert BTC 70000"),
         BotCommand(command="p", description="Курс: /p ETH"),
         BotCommand(command="export", description="Выгрузка в CSV"),
         BotCommand(command="help", description="Помощь"),
     ])
 
-    worker = asyncio.create_task(alerts.alert_worker(bot, db, config.alert_interval))
+    workers = [
+        asyncio.create_task(alerts.alert_worker(bot, db, config.alert_interval)),
+        asyncio.create_task(exchange.sync_worker(bot, db, config.sync_interval)),
+    ]
     try:
         await dp.start_polling(bot)
     finally:
-        worker.cancel()
+        for w in workers:
+            w.cancel()
         await prices.close()
+        await Binance.close()
         await db.close()
         await bot.session.close()
 

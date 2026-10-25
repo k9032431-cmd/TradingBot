@@ -13,6 +13,9 @@ class Config:
     token: str = os.getenv("BOT_TOKEN", "")
     db_path: str = os.getenv("DB_PATH", str(ROOT / "data" / "trading.db"))
     alert_interval: int = int(os.getenv("ALERT_INTERVAL", "10"))
+    binance_spot: str = os.getenv("BINANCE_SPOT_BASE", "https://api.binance.com")
+    binance_futures: str = os.getenv("BINANCE_FUTURES_BASE", "https://fapi.binance.com")
+    sync_interval: int = int(os.getenv("SYNC_INTERVAL", "60"))
     allowed_users: frozenset[int] = field(
         default_factory=lambda: frozenset(
             int(x) for x in os.getenv("ALLOWED_USERS", "").replace(" ", "").split(",") if x
