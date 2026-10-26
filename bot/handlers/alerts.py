@@ -38,14 +38,17 @@ def parse_targets(text: str, current: float) -> list[float]:
 
 async def create_alerts(db: DB, uid: int, symbol: str, targets: list[float], current: float) -> str:
     lines = []
+    prec = prices.prec.get(symbol)
     for t in targets:
+        if prec is not None:
+            t = round(t, prec)  # цена алерта — по шагу цены пары, как на бирже
         direction = "above" if t > current else "below"
         await db.add_alert(uid, symbol, t, direction)
         arrow = e("up") if direction == "above" else e("down")
         diff = (t / current - 1) * 100
-        lines.append(f"{arrow} <b>{fmt_price(t)}</b>  ({diff:+.2f}%)")
+        lines.append(f"{arrow} <b>{fmt_price(t, symbol)}</b>  ({diff:+.2f}%)")
     return (f"{e('check')} <b>Алерт{'ы' if len(targets) > 1 else ''} на {short(symbol)} создан{'ы' if len(targets) > 1 else ''}</b>\n\n"
-            + "\n".join(lines) + f"\n\nСейчас: <b>{fmt_price(current)}</b>\nЯ напишу, как только цена дойдёт.")
+            + "\n".join(lines) + f"\n\nСейчас: <b>{fmt_price(current, symbol)}</b>\nЯ напишу, как только цена дойдёт.")
 
 
 @router.callback_query(F.data == "alerts")
@@ -62,8 +65,8 @@ async def alerts_list(call: CallbackQuery, state: FSMContext, db: DB) -> None:
         cur = allp.get(r["symbol"])
         arrow = e("up") if r["direction"] == "above" else e("down")
         dist = f"  <i>{(r['target'] / cur - 1) * 100:+.2f}%</i>" if cur else ""
-        lines.append(f"{arrow} <b>{short(r['symbol'])}</b>  {fmt_price(r['target'])}{dist}")
-    dels = [btn(f"{short(r['symbol'])} {fmt_price(r['target'])}", f"al:del:{r['id']}", RED, "trash") for r in rows[:20]]
+        lines.append(f"{arrow} <b>{short(r['symbol'])}</b>  {fmt_price(r['target'], r['symbol'])}{dist}")
+    dels = [btn(f"{short(r['symbol'])} {fmt_price(r['target'], r['symbol'])}", f"al:del:{r['id']}", RED, "trash") for r in rows[:20]]
     await show(call, f"{e('alert')} <b>Алерты</b>  ·  {len(rows)}\n\n" + "\n".join(lines)
                + "\n\n<i>Нажми на алерт, чтобы удалить</i>",
                kb(*[dels[i:i + 2] for i in range(0, len(dels), 2)],
@@ -89,9 +92,9 @@ async def ask_target(target: Message | CallbackQuery, state: FSMContext, raw: st
         return
     await state.set_state(NewAlert.target)
     await state.update_data(symbol=symbol, current=current)
-    await show(target, f"{e('alert')} <b>{short(symbol)}</b>  ·  сейчас <b>{fmt_price(current)}</b>\n\n"
+    await show(target, f"{e('alert')} <b>{short(symbol)}</b>  ·  сейчас <b>{fmt_price(current, symbol)}</b>\n\n"
                        f"Введи цену (можно несколько или в процентах):\n"
-                       f"<code>{fmt_price(current * 1.05)}</code>\n<code>+5% -3%</code>",
+                       f"<code>{fmt_price(current * 1.05, symbol)}</code>\n<code>+5% -3%</code>",
                kb([btn("+2%", "al:pct:2", GREEN), btn("+5%", "al:pct:5", GREEN), btn("+10%", "al:pct:10", GREEN)],
                   [btn("−2%", "al:pct:-2", RED), btn("−5%", "al:pct:-5", RED), btn("−10%", "al:pct:-10", RED)],
                   [btn("Отмена", "alerts", icon="cross")]))
@@ -132,7 +135,7 @@ async def alert_target(message: Message, state: FSMContext, db: DB) -> None:
         return
     await state.clear()
     text = await create_alerts(db, message.from_user.id, data["symbol"], targets, data["current"])
-    await message.answer(text, reply_markup=kb([btn("Все алерты", "alerts", BLUE, "alert"), *back_row()]))
+    await show(message, text, kb([btn("Все алерты", "alerts", BLUE, "alert"), *back_row()]))
 
 
 @router.message(Command("alert"))
@@ -152,8 +155,8 @@ async def cmd_alert(message: Message, command: CommandObject, db: DB) -> None:
     except ValueError:
         await message.answer(f"{e('cross')} Не понял цену.")
         return
-    await message.answer(await create_alerts(db, message.from_user.id, symbol, targets, current),
-                         reply_markup=kb([btn("Все алерты", "alerts", BLUE, "alert"), *back_row()]))
+    await show(message, await create_alerts(db, message.from_user.id, symbol, targets, current),
+               kb([btn("Все алерты", "alerts", BLUE, "alert"), *back_row()]))
 
 
 @router.callback_query(F.data.startswith("al:del:"))
@@ -194,9 +197,9 @@ async def alert_worker(bot: Bot, db: DB, interval: int) -> None:
                     try:
                         await bot.send_message(
                             a["user_id"],
-                            f"{e('fire')} <b>АЛЕРТ · {short(a['symbol'])}</b>\n━━━━━━━━━━━━━━━━━━\n"
-                            f"{arrow} Цена {word} <b>{fmt_price(a['target'])}</b>\n"
-                            f"Сейчас: <b>{fmt_price(p)}</b>",
+                            f"{e('fire')} <b>АЛЕРТ · {short(a['symbol'])}</b>\n\n"
+                            f"{arrow} Цена {word} <b>{fmt_price(a['target'], a['symbol'])}</b>\n"
+                            f"Сейчас: <b>{fmt_price(p, a['symbol'])}</b>",
                             reply_markup=kb(
                                 [btn("Новый алерт", f"al:for:{short(a['symbol'])}", GREEN, "alert"),
                                  btn("Курс", f"px:{a['symbol']}", BLUE, "price")],

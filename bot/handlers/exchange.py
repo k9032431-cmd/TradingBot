@@ -27,7 +27,7 @@ class Connect(StatesGroup):
 
 
 HOWTO = (
-    f"{e('link')} <b>Подключение Binance (Tiger.com)</b>\n━━━━━━━━━━━━━━━━━━\n"
+    f"{e('link')} <b>Подключение Binance (Tiger.com)</b>\n\n"
     "1. Открой <b>account.tiger.com/api</b> → «Новый API-ключ»\n"
     "2. Оставь <b>только «Права на чтение»</b> — без торговли и фьючерсов\n"
     "3. Отправь сюда одним сообщением ключ и секрет:\n"
@@ -46,7 +46,7 @@ async def exchange_screen(call: CallbackQuery, state: FSMContext, db: DB) -> Non
         await show(call, HOWTO, kb([btn("Ввести ключ", "ex:connect", GREEN, "link")], back_row()))
         return
     await call.answer("Загружаю…")
-    lines = [f"{e('exchange')} <b>Binance · Tiger.com</b>\n━━━━━━━━━━━━━━━━━━"]
+    lines = [f"{e('exchange')} <b>Binance · Tiger.com</b>\n"]
     try:
         api = client(row)
         acc, spot = await asyncio.gather(api.futures_account(), api.spot_balances(), return_exceptions=True)
@@ -126,7 +126,7 @@ async def got_keys(message: Message, state: FSMContext, db: DB) -> None:
         res = await sync_user(db, await db.get_api(uid, EXCHANGE), initial=True)
         trades = res["trades"]
         total = sum(t["usd"] for t in trades)
-        text = (f"{e('check')} <b>Binance подключён</b>\n━━━━━━━━━━━━━━━━━━\n"
+        text = (f"{e('check')} <b>Binance подключён</b>\n\n"
                 f"Импортировано сделок:  <b>{len(trades)}</b>\n"
                 f"Реализованный P&L:  {pnl(total, 'USDT')}\n"
                 f"Комиссии:  {pnl(res['fees'], 'USDT')}\n"
@@ -135,7 +135,8 @@ async def got_keys(message: Message, state: FSMContext, db: DB) -> None:
     except Exception as err:  # noqa: BLE001
         log.exception("first import")
         text = f"{e('check')} Ключ подключён, но импорт истории не удался: {h(str(err))}. Попробую позже автоматически."
-    await wait.edit_text(text, reply_markup=kb(
+    await wait.delete()
+    await show(message, text, kb(
         [btn("Статистика", "stats:month", BLUE, "stats"), btn("Позиции", "ex:pos", BLUE, "position")], back_row()))
 
 
@@ -150,11 +151,13 @@ async def positions_view(db: DB, uid: int):
         return f"{e('cross')} Ошибка Binance: {h(err.human)}", markup
     except Exception as err:  # noqa: BLE001
         return f"{e('cross')} Binance не отвечает ({h(type(err).__name__)})", markup
-    head = f"{e('position')} <b>Открытые позиции</b>  ·  {time.strftime('%H:%M:%S')}\n━━━━━━━━━━━━━━━━━━\n"
+    await prices.load_futures_ticks()  # цены в позициях — с шагом цены пары, как в терминале
+    head = f"{e('position')} <b>Открытые позиции</b>  ·  {time.strftime('%H:%M:%S')}\n\n"
     if not rows:
         return head + "Открытых позиций нет.", markup
-    blocks, total = [], 0.0
-    for p in sorted(rows, key=lambda p: -abs(float(p["unRealizedProfit"]))):
+    blocks, total = [], sum(float(p["unRealizedProfit"]) for p in rows)
+    rows = sorted(rows, key=lambda p: -abs(float(p["unRealizedProfit"])))
+    for p in rows[:6]:  # больше не влезет в подпись к баннеру
         amt = float(p["positionAmt"])
         entry, mark = float(p["entryPrice"]), float(p["markPrice"])
         upnl = float(p["unRealizedProfit"])
@@ -163,15 +166,15 @@ async def positions_view(db: DB, uid: int):
         roe = upnl / margin * 100 if margin else 0
         liq = float(p.get("liquidationPrice") or 0)
         side = f"{e('profit')} LONG" if amt > 0 else f"{e('loss')} SHORT"
-        total += upnl
         blocks.append(
             f"{side}  <b>{short(p['symbol'])}</b>  x{lev:g}\n"
             f"Объём {abs(amt):g}  ·  {money(abs(amt) * mark, 'USDT')}\n"
-            f"Вход {fmt_price(entry)} → {fmt_price(mark)}\n"
+            f"Вход {fmt_price(entry, p['symbol'])} → {fmt_price(mark, p['symbol'])}\n"
             f"P&L  {pnl(upnl)}  ({roe:+.1f}%)"
-            + (f"\nЛиквидация  {fmt_price(liq)}" if liq else "")
+            + (f"\nЛиквидация  {fmt_price(liq, p['symbol'])}" if liq else "")
         )
-    return head + "\n\n".join(blocks) + f"\n━━━━━━━━━━━━━━━━━━\nИтого:  {pnl(total, 'USDT')}", markup
+    more = f"\n\n<i>…и ещё {len(rows) - 6}</i>" if len(rows) > 6 else ""
+    return head + "\n\n".join(blocks) + more + f"\n\nИтого:  {pnl(total, 'USDT')}", markup
 
 
 @router.callback_query(F.data == "ex:pos")
@@ -182,7 +185,7 @@ async def positions(call: CallbackQuery, db: DB) -> None:
 @router.message(Command("pos"))
 async def cmd_positions(message: Message, db: DB) -> None:
     text, markup = await positions_view(db, message.from_user.id)
-    await message.answer(text, reply_markup=markup)
+    await show(message, text, markup)
 
 
 @router.callback_query(F.data == "ex:sync")

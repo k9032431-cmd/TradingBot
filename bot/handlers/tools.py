@@ -1,4 +1,6 @@
 """Курс монеты, калькулятор позиции, настройки."""
+import time
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -35,11 +37,14 @@ async def price_card(symbol: str) -> tuple[str, object] | None:
     last, chg = float(t["lastPrice"]), float(t["priceChangePercent"])
     mark = e("profit") if chg >= 0 else e("loss")
     vol = float(t["quoteVolume"])
-    text = (f"{e('price')} <b>{short(symbol)}</b>  <code>{symbol}</code>\n━━━━━━━━━━━━━━━━━━\n"
-            f"Цена:  <b>{fmt_price(last)}</b>\n"
-            f"24ч:    {mark} <b>{chg:+.2f}%</b>\n"
-            f"Макс / мин:  {fmt_price(float(t['highPrice']))} / {fmt_price(float(t['lowPrice']))}\n"
-            f"Объём 24ч:  {money(vol)}")
+    market = "Binance Futures" if t["source"] == "futures" else "Binance Spot"
+    text = (f"{e('price')} <b>{short(symbol)}</b>  ·  <i>{market}</i>\n\n"
+            f"Цена:  <b>{fmt_price(last, symbol)}</b>\n"
+            f"За 24ч:  {mark} <b>{chg:+.2f}%</b>\n"
+            f"Макс:  {fmt_price(float(t['highPrice']), symbol)}\n"
+            f"Мин:  {fmt_price(float(t['lowPrice']), symbol)}\n"
+            f"Объём:  {money(vol)} $\n\n"
+            f"<i>Обновлено {time.strftime('%H:%M:%S')}</i>")
     markup = kb([btn("Обновить", f"px:{symbol}", BLUE), btn("Алерт", f"al:for:{symbol}", GREEN, "alert")],
                 [btn("Другая монета", "price", icon="price"), *back_row()])
     return text, markup
@@ -68,7 +73,7 @@ async def price_text(message: Message, state: FSMContext, command: CommandObject
         return
     await state.clear()
     text, markup = card
-    await message.answer(text, reply_markup=markup)
+    await show(message, text, markup)
 
 
 # ---------- калькулятор ----------
@@ -101,7 +106,7 @@ async def calc(message: Message) -> None:
     qty = risk / dist
     notional = qty * entry
     lines = [
-        f"{e('calc')} <b>{side}</b>  ·  риск {risk_pct:g}%\n━━━━━━━━━━━━━━━━━━",
+        f"{e('calc')} <b>{side}</b>  ·  риск {risk_pct:g}%\n",
         f"Риск:  <b>{money(risk)}</b>",
         f"До стопа:  <b>{dist / entry * 100:.2f}%</b>",
         f"Объём:  <b>{qty:.6g}</b> монет",
@@ -111,8 +116,7 @@ async def calc(message: Message) -> None:
     if take:
         rr = abs(take - entry) / dist
         lines += [f"{e('target')} R:R  <b>1 : {rr:.2f}</b>", f"Профит на тейке:  <b>{money(qty * abs(take - entry))}</b>"]
-    await message.answer("\n".join(lines) + "\n\n<i>Можешь сразу ввести следующий расчёт</i>",
-                         reply_markup=kb(back_row()))
+    await show(message, "\n".join(lines) + "\n\n<i>Можешь сразу ввести следующий расчёт</i>", kb(back_row()))
 
 
 # ---------- настройки ----------
@@ -121,7 +125,7 @@ CURRENCIES = ["USDT", "USD", "EUR", "RUB", "TMT"]
 
 async def settings_text(db: DB, uid: int) -> str:
     u = await db.ensure_user(uid)
-    return (f"{e('settings')} <b>Настройки</b>\n━━━━━━━━━━━━━━━━━━\n"
+    return (f"{e('settings')} <b>Настройки</b>\n\n"
             f"Валюта:  <b>{u['currency']}</b>\n"
             f"Стартовый баланс:  <b>{money(u['start_balance'], u['currency'])}</b>")
 
@@ -162,8 +166,8 @@ async def set_balance(message: Message, state: FSMContext, db: DB) -> None:
     await state.clear()
     await db.set_user(message.from_user.id, start_balance=value)
     u = await db.ensure_user(message.from_user.id)
-    await message.answer(f"{e('check')} Сохранено\n\n" + await settings_text(db, message.from_user.id),
-                         reply_markup=settings_kb(u["currency"]))
+    await show(message, f"{e('check')} Сохранено\n\n" + await settings_text(db, message.from_user.id),
+               settings_kb(u["currency"]))
 
 
 @router.callback_query(F.data == "set:wipe")

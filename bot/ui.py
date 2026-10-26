@@ -57,15 +57,22 @@ def back_row(cb: str = "menu") -> list[InlineKeyboardButton]:
 
 
 def main_menu(connected: bool = False) -> InlineKeyboardMarkup:
-    exchange_row = ([btn("Позиции", "ex:pos", BLUE, "position"), btn("Binance", "ex", BLUE, "exchange")]
-                    if connected else [btn("Подключить Binance (Tiger)", "ex", BLUE, "link")])
+    exchange = ([btn("Позиции", "ex:pos", BLUE, "position"), btn("Binance", "ex", BLUE, "exchange")]
+                if connected else [btn("Подключить Binance", "ex", BLUE, "link")])
     return kb(
-        exchange_row,
         [btn("Прибыль", "add:profit", GREEN, "profit"), btn("Убыток", "add:loss", RED, "loss")],
-        [btn("Расход", "add:expense", RED, "expense"), btn("Депозит / вывод", "add:cash", GREEN, "wallet")],
         [btn("Статистика", "stats:month", BLUE, "stats"), btn("История", "hist:0", BLUE, "history")],
         [btn("Алерты", "alerts", BLUE, "alert"), btn("Курс", "price", BLUE, "price")],
-        [btn("Калькулятор", "calc", icon="calc"), btn("Настройки", "settings", icon="settings")],
+        exchange,
+        [btn("Ещё", "more", icon="settings")],
+    )
+
+
+def more_menu() -> InlineKeyboardMarkup:
+    return kb(
+        [btn("Расход", "add:expense", RED, "expense"), btn("Депозит / вывод", "add:cash", GREEN, "wallet")],
+        [btn("Калькулятор", "calc", BLUE, "calc"), btn("Настройки", "settings", BLUE, "settings")],
+        back_row(),
     )
 
 

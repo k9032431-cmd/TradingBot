@@ -1,32 +1,60 @@
+import re
 import time
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
+
+from ..config import ROOT
 
 from ..db import DB
 from ..sync import EXCHANGE, snapshot
-from ..ui import e, h, main_menu, money, pnl
+from ..ui import e, h, main_menu, money, more_menu, pnl
 
 router = Router()
 
 
+BANNER = ROOT / "assets" / "banner.png"
+CAPTION_LIMIT = 1000           # у подписи к фото лимит 1024 символа
+_banner_id: str | None = None  # file_id баннера после первой загрузки — дальше не грузим заново
+
+
+def _fits(text: str) -> bool:
+    return len(re.sub(r"<[^>]+>", "", text)) <= CAPTION_LIMIT
+
+
+async def _send(message: Message, text: str, markup: InlineKeyboardMarkup | None) -> None:
+    """Новый экран: широкий баннер + текст в подписи (так меню и кнопки во всю ширину)."""
+    global _banner_id
+    if not _fits(text):
+        await message.answer(text, reply_markup=markup)
+        return
+    sent = await message.answer_photo(_banner_id or FSInputFile(BANNER), caption=text, reply_markup=markup)
+    _banner_id = sent.photo[-1].file_id
+
+
 async def show(target: Message | CallbackQuery, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
-    """Колбэк — редактируем сообщение (навигация без спама), сообщение — отвечаем новым."""
-    if isinstance(target, CallbackQuery):
-        try:
-            await target.message.edit_text(text, reply_markup=markup)
-        except TelegramBadRequest as err:
-            if "not modified" not in str(err):
-                await target.message.answer(text, reply_markup=markup)
-        try:
-            await target.answer()
-        except TelegramBadRequest:
-            pass  # колбэк уже отвечен (например, всплывающим уведомлением)
-    else:
-        await target.answer(text, reply_markup=markup)
+    """Колбэк — меняем текущий экран на месте, сообщение — отправляем новый экран."""
+    if isinstance(target, Message):
+        await _send(target, text, markup)
+        return
+    msg = target.message
+    try:
+        if msg.photo and _fits(text):
+            await msg.edit_caption(caption=text, reply_markup=markup)
+        elif msg.text and not _fits(text):
+            await msg.edit_text(text, reply_markup=markup)
+        else:  # уведомление (алерт, сделка) не трогаем — открываем экран новым сообщением
+            await _send(msg, text, markup)
+    except TelegramBadRequest as err:
+        if "not modified" not in str(err):
+            await _send(msg, text, markup)
+    try:
+        await target.answer()
+    except TelegramBadRequest:
+        pass  # колбэк уже отвечен (например, всплывающим уведомлением)
 
 
 def day_start(ts: float | None = None) -> int:
@@ -42,43 +70,46 @@ def month_start() -> int:
 async def menu_text(db: DB, user_id: int, name: str) -> str:
     user = await db.ensure_user(user_id)
     cur = user["currency"]
-    balance = user["start_balance"] + await db.balance_delta(user_id)
     today = sum(r["amount"] for r in await db.entries(user_id, day_start()) if r["kind"] in ("trade", "expense"))
-    month = sum(r["amount"] for r in await db.entries(user_id, month_start()) if r["kind"] in ("trade", "expense"))
     alerts = len(await db.user_alerts(user_id))
     snap = await snapshot(db, user_id)
-    exchange = ""
+    lines = [f"Привет, <b>{h(name)}</b> {e('logo')}", ""]
     if snap:
-        exchange = (f"{e('exchange')} Binance Futures:  <b>{money(snap['equity'], 'USDT')}</b>\n"
-                    f"Открытый P&L:  {pnl(snap['upnl'], 'USDT')}\n")
-    elif await db.get_api(user_id, EXCHANGE):
-        exchange = f"{e('exchange')} Binance:  <i>нет связи</i>\n"
-    return (
-        f"{e('logo')} <b>Trading Desk</b>  ·  {h(name)}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"{exchange}"
-        f"{e('wallet')} Журнал:  <b>{money(balance, cur)}</b>\n"
-        f"Сегодня:  {pnl(today, cur)}\n"
-        f"Месяц:     {pnl(month, cur)}\n"
-        f"{e('alert')} Активных алертов:  <b>{alerts}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Выбери действие</i>"
-    )
+        lines += [f"{e('wallet')} Баланс Binance:  <b>{money(snap['equity'], 'USDT')}</b>",
+                  f"{e('position')} Открытые позиции:  {pnl(snap['upnl'], 'USDT')}"]
+    else:
+        balance = user["start_balance"] + await db.balance_delta(user_id)
+        lines.append(f"{e('wallet')} Баланс:  <b>{money(balance, cur)}</b>")
+        if await db.get_api(user_id, EXCHANGE):
+            lines.append(f"{e('exchange')} Binance:  <i>нет связи</i>")
+    lines += [f"{e('stats')} Сегодня:  {pnl(today, cur)}",
+              f"{e('alert')} Алерты:  <b>{alerts}</b>"]
+    return "\n".join(lines)
+
+
+async def open_menu(target: Message | CallbackQuery, db: DB) -> None:
+    uid = target.from_user.id
+    await show(target, await menu_text(db, uid, target.from_user.first_name),
+               main_menu(bool(await db.get_api(uid, EXCHANGE))))
 
 
 @router.message(CommandStart())
 @router.message(Command("menu"))
 async def cmd_start(message: Message, state: FSMContext, db: DB) -> None:
     await state.clear()
-    await message.answer(await menu_text(db, message.from_user.id, message.from_user.first_name),
-                         reply_markup=main_menu(bool(await db.get_api(message.from_user.id, EXCHANGE))))
+    await open_menu(message, db)
 
 
 @router.callback_query(F.data == "menu")
 async def cb_menu(call: CallbackQuery, state: FSMContext, db: DB) -> None:
     await state.clear()
-    await show(call, await menu_text(db, call.from_user.id, call.from_user.first_name),
-               main_menu(bool(await db.get_api(call.from_user.id, EXCHANGE))))
+    await open_menu(call, db)
+
+
+@router.callback_query(F.data == "more")
+async def cb_more(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await show(call, f"{e('settings')} <b>Ещё</b>", more_menu())
 
 
 @router.message(Command("id"))

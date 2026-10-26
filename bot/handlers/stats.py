@@ -45,7 +45,7 @@ async def stats(call: CallbackQuery, db: DB) -> None:
             for k, v in PERIODS.items()]
     markup = kb(tabs[:2], tabs[2:], [btn("История", "hist:0", BLUE, "history"), *back_row()])
 
-    head = f"{e('stats')} <b>Статистика · {PERIODS[period]}</b>\n━━━━━━━━━━━━━━━━━━\n"
+    head = f"{e('stats')} <b>Статистика · {PERIODS[period]}</b>\n\n"
     if not rows:
         await show(call, head + "Нет записей за этот период.", markup)
         return
@@ -90,5 +90,5 @@ async def stats(call: CallbackQuery, db: DB) -> None:
                  [f"{h(c)}:  {pnl(v, cur)}" for c, v in sorted(cats.items(), key=lambda x: x[1])]
 
     balance = user["start_balance"] + await db.balance_delta(uid)
-    lines += ["━━━━━━━━━━━━━━━━━━", f"{e('wallet')} Баланс: <b>{money(balance, cur)}</b>"]
+    lines += ["", f"{e('wallet')} Баланс: <b>{money(balance, cur)}</b>"]
     await show(call, head + "\n".join(lines), markup)

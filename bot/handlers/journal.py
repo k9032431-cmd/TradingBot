@@ -115,7 +115,7 @@ async def save_entry(message: Message, db: DB, kind: str, text: str, category: s
         lines.append(f"<i>{h(note)}</i>")
     lines += ["", f"{e('wallet')} Баланс: <b>{money(balance, cur)}</b>"]
     again = "add:profit" if kind == "profit" else "add:loss" if kind == "loss" else "add:expense" if kind == "expense" else "add:cash"
-    await message.answer("\n".join(lines), reply_markup=kb(
+    await show(message, "\n".join(lines), kb(
         [btn("Отменить", f"del:{entry_id}:new", RED, "trash"), btn("Ещё", again, GREEN, "check")],
         back_row(),
     ))
@@ -177,7 +177,7 @@ async def delete_entry(call: CallbackQuery, db: DB) -> None:
     ok = await db.delete_entry(call.from_user.id, int(entry_id))
     await call.answer("Удалено" if ok else "Уже удалено", show_alert=False)
     if back == "new":
-        await call.message.edit_text(f"{e('trash')} Запись #{entry_id} отменена.", reply_markup=kb(back_row()))
+        await show(call, f"{e('trash')} Запись #{entry_id} отменена.", kb(back_row()))
     else:
         await history(call, db, int(back))
 

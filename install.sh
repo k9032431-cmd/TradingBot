@@ -61,29 +61,35 @@ if [[ $STDIN_TTY == 0 && -n "${SUDO_USER:-}" && -z "${BOT_TOKEN:-}" && ! -f "${D
 fi
 command -v apt-get >/dev/null || die "Нужен Ubuntu или Debian (apt-get не найден)"
 
-echo -e "${G}"
-echo "  ╔══════════════════════════════════╗"
-echo "  ║   💎  Trading Desk — установка    ║"
-echo "  ╚══════════════════════════════════╝"
-echo -e "${N}"
+if [[ -z "${REEXEC:-}" ]]; then  # после переключения на новую версию заголовок не повторяем
+  echo -e "${G}"
+  echo "  ╔══════════════════════════════════╗"
+  echo "  ║   💎  Trading Desk — установка    ║"
+  echo "  ╚══════════════════════════════════╝"
+  echo -e "${N}"
+fi
 
 # ---------- системные пакеты ----------
-step "Устанавливаю системные пакеты"
+step "Системные пакеты"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-pip >/dev/null
-
 PY=python3
-if ! $PY -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
-  warn "Системный Python $($PY -V | cut -d' ' -f2) слишком старый, нужен 3.10+"
-  if grep -qi ubuntu /etc/os-release; then
-    apt-get install -y -qq software-properties-common >/dev/null
-    add-apt-repository -y ppa:deadsnakes/ppa >/dev/null
-    apt-get update -qq
-    apt-get install -y -qq python3.11 python3.11-venv >/dev/null
-    PY=python3.11
-  else
-    die "Обнови систему до Debian 12 / Ubuntu 22.04 или новее"
+if command -v git >/dev/null && command -v curl >/dev/null &&
+   $PY -c 'import sys, venv, ensurepip; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+  :  # всё уже стоит — не тратим время на apt (обычно при обновлении)
+else
+  apt-get update -qq
+  apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-pip >/dev/null
+  if ! $PY -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+    warn "Системный Python $($PY -V | cut -d' ' -f2) слишком старый, нужен 3.10+"
+    if grep -qi ubuntu /etc/os-release; then
+      apt-get install -y -qq software-properties-common >/dev/null
+      add-apt-repository -y ppa:deadsnakes/ppa >/dev/null
+      apt-get update -qq
+      apt-get install -y -qq python3.11 python3.11-venv >/dev/null
+      PY=python3.11
+    else
+      die "Обнови систему до Debian 12 / Ubuntu 22.04 или новее"
+    fi
   fi
 fi
 ok "$($PY -V)"
@@ -106,10 +112,21 @@ as_bot() { runuser -u "$SVC_USER" -- "$@"; }
 
 if [[ -d "$DIR/.git" ]]; then
   chown -R "$SVC_USER:$SVC_USER" "$DIR"
+  old="${OLD_REV:-$(as_bot git -C "$DIR" rev-parse HEAD)}"
   as_bot git -C "$DIR" fetch -q origin
   target="origin/${BRANCH:-$(as_bot git -C "$DIR" rev-parse --abbrev-ref HEAD)}"
   as_bot git -C "$DIR" reset -q --hard "$target"   # .env, data/, emoji.json не в git — не трогаются
-  ok "Обновлено до $(as_bot git -C "$DIR" log -1 --format='%h %s')"
+  new="$(as_bot git -C "$DIR" rev-parse HEAD)"
+  if [[ -z "${REEXEC:-}" && "$old" != "$new" ]]; then
+    # дальше продолжает уже новая версия установщика
+    exec env REEXEC=1 OLD_REV="$old" bash "$DIR/install.sh"
+  fi
+  if [[ "$old" == "$new" ]]; then
+    ok "Уже последняя версия ($(as_bot git -C "$DIR" log -1 --format='%h  %cd' --date=format:'%d.%m %H:%M'))"
+  else
+    ok "Обновлено. Что нового:"
+    as_bot git -C "$DIR" log --format='      • %s' "$old..$new" | head -15
+  fi
   UPDATING=1
 else
   mkdir -p "$DIR"
@@ -202,15 +219,23 @@ EOF
 cat >/usr/local/bin/tbot <<'EOF'
 #!/usr/bin/env bash
 # Управление ботом: tbot status | logs | restart | stop | start | update | config
-case "${1:-status}" in
+DIR="__DIR__"
+case "${1:-help}" in
   status)  systemctl status tradingbot --no-pager ;;
   logs)    journalctl -u tradingbot -f -n 100 ;;
   restart|stop|start) sudo systemctl "$1" tradingbot && echo "ok: $1" ;;
-  update)  sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh)" ;;
-  config)  sudo "${EDITOR:-nano}" /opt/tradingbot/.env && sudo systemctl restart tradingbot ;;
-  *)       echo "tbot status | logs | restart | stop | start | update | config" ;;
+  update)  sudo bash "$DIR/install.sh" ;;
+  config)  sudo "${EDITOR:-nano}" "$DIR/.env" && sudo systemctl restart tradingbot ;;
+  *)
+    echo "tbot status   — работает ли бот"
+    echo "tbot logs     — логи (выход Ctrl+C)"
+    echo "tbot restart  — перезапуск"
+    echo "tbot update   — обновить до последней версии"
+    echo "tbot config   — изменить настройки (.env)"
+    ;;
 esac
 EOF
+sed -i "s#__DIR__#$DIR#" /usr/local/bin/tbot
 chmod +x /usr/local/bin/tbot
 
 systemctl daemon-reload
@@ -242,7 +267,8 @@ if [[ $UPDATING == 1 ]]; then
 else
   echo -e "  ${G}Готово!${N} Открой своего бота в Telegram и нажми /start"
 fi
-echo "  Управление:  tbot status | logs | restart | update | config"
+echo "  Обновить бота:  tbot update"
+echo "  Все команды:    tbot"
 echo -e "${G}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}\n"
 }
 
