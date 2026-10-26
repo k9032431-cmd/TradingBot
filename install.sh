@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Установка / обновление Trading Desk бота на VPS (Ubuntu / Debian).
 #
-#   curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh | sudo bash
+#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh)"
 #
 # Повторный запуск = обновление (данные, .env и ключи сохраняются).
-# Без вопросов:  ... | sudo BOT_TOKEN=123:abc ALLOWED_USERS=111 TZ_NAME=Asia/Ashgabat bash
+# Без вопросов:  BOT_TOKEN=123:abc ALLOWED_USERS=111 TZ_NAME=Asia/Ashgabat bash -c "$(curl -fsSL ...)"  (от root)
+#
+# Не запускай через «curl | sudo bash»: в Ubuntu 25.10+ (sudo-rs) так не работает ввод с клавиатуры.
 set -euo pipefail
+# shellcheck disable=SC2016  # команда показывается пользователю как есть
+INSTALL_CMD='sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh)"'
 
 REPO="${REPO:-https://github.com/k9032431-cmd/TradingBot.git}"
 BRANCH="${BRANCH:-}"
@@ -44,7 +48,17 @@ ask() {  # ask "Вопрос" "по умолчанию" -> ответ
 
 # весь скрипт в функции: bash дочитает его целиком до запуска, и apt не «съест» остаток из curl | bash
 main() {
-[[ $EUID -eq 0 ]] || die "Запусти от root:  curl -fsSL ... | sudo bash"
+[[ $EUID -eq 0 ]] || die "Запусти от root:  $INSTALL_CMD"
+
+# «curl | sudo bash»: sudo-rs (Ubuntu 25.10+) не передаёт клавиатуру в скрипт — ввод виснет.
+# Останавливаемся сразу с понятной подсказкой, если придётся что-то спрашивать.
+if [[ $STDIN_TTY == 0 && -n "${SUDO_USER:-}" && -z "${BOT_TOKEN:-}" && ! -f "${DIR}/.env" ]]; then
+  die "Так запущенный скрипт не сможет прочитать ввод с клавиатуры.
+  Запусти установку этой командой:
+
+    $INSTALL_CMD
+"
+fi
 command -v apt-get >/dev/null || die "Нужен Ubuntu или Debian (apt-get не найден)"
 
 echo -e "${G}"
@@ -120,7 +134,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   while true; do
     if [[ ! "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{30,}$ ]]; then
       [[ -n "$token" ]] && warn "Не похоже на токен (формат 123456789:AAH...), попробуй ещё раз"
-      has_tty || die "Передай токен: ... | sudo BOT_TOKEN=123:abc bash"
+      has_tty || die "Передай токен: BOT_TOKEN=123:abc bash -c \"\$(curl -fsSL ...)\""
       token="$(ask "BOT_TOKEN" "")" || die "Ввод прерван"
       token="$(tr -d '[:space:]' <<<"$token")"   # убираем пробелы и \r, которые добавляют мобильные терминалы
       continue
@@ -192,7 +206,7 @@ case "${1:-status}" in
   status)  systemctl status tradingbot --no-pager ;;
   logs)    journalctl -u tradingbot -f -n 100 ;;
   restart|stop|start) sudo systemctl "$1" tradingbot && echo "ok: $1" ;;
-  update)  curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh | sudo bash ;;
+  update)  sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh)" ;;
   config)  sudo "${EDITOR:-nano}" /opt/tradingbot/.env && sudo systemctl restart tradingbot ;;
   *)       echo "tbot status | logs | restart | stop | start | update | config" ;;
 esac
@@ -232,4 +246,5 @@ echo "  Управление:  tbot status | logs | restart | update | config"
 echo -e "${G}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${N}\n"
 }
 
+STDIN_TTY=0; [[ -t 0 ]] && STDIN_TTY=1   # проверяем до main: внутри у неё stdin — /dev/null
 main "$@" </dev/null

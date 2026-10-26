@@ -25,8 +25,10 @@
 Ubuntu 20.04+ / Debian 12+, зайди на сервер по SSH и выполни:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh | sudo bash
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/k9032431-cmd/TradingBot/HEAD/install.sh)"
 ```
+
+> Именно так, а не `curl ... | sudo bash`: в Ubuntu 25.10+ (sudo-rs) при таком запуске скрипт не получает ввод с клавиатуры.
 
 Скрипт поставит Python и зависимости, спросит токен бота (и сразу проверит его в Telegram), твой Telegram ID и часовой пояс, включит автозапуск (systemd) и проверит, доступен ли Binance с этого сервера. Повторный запуск той же команды — обновление (данные и ключи сохраняются).
 
